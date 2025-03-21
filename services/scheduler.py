@@ -7,7 +7,7 @@ from celery.schedules import crontab
 
 from config import REDIS_URL
 from database import crud, SessionLocal
-from whatsapp.client import WhatsAppClient
+from whatsapp.client import TelegramClient
 from services.reminder import ReminderService
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def check_reminders():
         
         # Create services
         reminder_service = ReminderService(db)
-        whatsapp_client = WhatsAppClient()
+        whatsapp_client = TelegramClient()
         
         # Process due reminders
         notifications = reminder_service.process_due_reminders()

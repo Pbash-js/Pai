@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 """
-WhatsApp Reminder & Calendar Bot - Consolidated Launcher Script
+Telegram Reminder & Calendar Bot - Consolidated Launcher Script
 This script provides a unified method to start all required services:
 - Redis server (if not running)
 - FastAPI application
 - Celery worker
 - Celery beat scheduler
 - Ngrok tunnel for exposing the API
+- Telegram webhook configuration (automatically sets up webhook URL)
 
 Supports both local development and Docker environments.
 """
@@ -232,6 +233,39 @@ def start_ngrok_tunnel(port):
         logger.error(f"Failed to start ngrok: {e}")
         return None
 
+def configure_telegram_webhook(webhook_url):
+    """Configure Telegram webhook using the TelegramWebhookManager."""
+    try:
+        # Import the TelegramWebhookManager class
+        from webhook_manager import TelegramWebhookManager
+        
+        # Create a webhook manager instance
+        webhook_manager = TelegramWebhookManager()
+        
+        # Construct the full webhook URL (add /webhook endpoint if not present)
+        if not webhook_url.endswith('/api/webhook'):
+            webhook_url = webhook_url.rstrip('/') + '/api/webhook'
+        
+        logger.info(f"Configuring Telegram webhook at: {webhook_url}")
+        
+        # Set up the webhook
+        result = webhook_manager.register_webhook(webhook_url)
+        
+        if not result.get("error"):
+            logger.info("Telegram webhook configured successfully!")
+            return True
+        else:
+            registration_error = result.get("message", "Unknown error")
+            logger.error(f"Failed to configure Telegram webhook: {registration_error}")
+            return False
+    
+    except ImportError:
+        logger.error("Could not import TelegramWebhookManager. Please ensure telegram_webhook_manager.py is in your project.")
+        return False
+    except Exception as e:
+        logger.error(f"Error configuring Telegram webhook: {e}")
+        return False
+
 def check_prerequisites() -> bool:
     """Verify all prerequisites are installed and available."""
     logger.info("Checking prerequisites...")
@@ -253,10 +287,7 @@ def check_prerequisites() -> bool:
     
     # Check for required environment variables
     required_env_vars = [
-        "GEMINI_API_KEY",
-        "WHATSAPP_API_KEY",
-        "WHATSAPP_PHONE_NUMBER_ID",
-        "WHATSAPP_BUSINESS_ACCOUNT_ID"
+        "TELEGRAM_BOT_TOKEN"
     ]
     
     # In Docker, these might be set differently or at runtime
@@ -353,6 +384,7 @@ def load_env_file():
         from dotenv import load_dotenv
         load_dotenv()
         logger.info("Loaded environment variables from .env file")
+        
     except ImportError:
         logger.warning("python-dotenv not installed. Ensure environment variables are set manually.")
 
@@ -394,7 +426,7 @@ def signal_handler(sig, frame):
     stop_event.set()
     cleanup()
     sys.exit(0)
-
+    
 def main():
     """Main function to start all services."""
     # Register signal handlers
@@ -421,6 +453,14 @@ def main():
     # Start ngrok tunnel first to establish webhook URL
     start_ngrok_tunnel(port)
     
+    # Configure Telegram webhook if ngrok URL is available
+    if ngrok_url and not is_docker():
+        webhook_configured = configure_telegram_webhook(ngrok_url)
+        if webhook_configured:
+            logger.info("Telegram webhook configured successfully")
+        else:
+            logger.warning("Telegram webhook configuration failed, continuing startup")
+    
     # Start the application services
     worker = start_celery_worker()
     beat = start_celery_beat()
@@ -435,14 +475,14 @@ def main():
     try:
         # Monitor services and keep the main thread alive
         logger.info("All services started successfully")
-        logger.info("WhatsApp Reminder & Calendar Bot is now running")
+        logger.info("Telegram Reminder & Calendar Bot is now running")
         
         if ngrok_url:
             logger.info(f"Your webhook URL is: {ngrok_url}")
-            logger.info("Configure this URL in your WhatsApp Business API settings")
+            logger.info("This URL has been automatically configured for your Telegram bot")
         else:
             logger.info(f"Local server running at http://localhost:{port}")
-            logger.info("You'll need to configure an accessible webhook URL for WhatsApp callbacks")
+            logger.info("You'll need to configure an accessible webhook URL for Telegram callbacks")
         
         logger.info("Press Ctrl+C to stop all services")
         
