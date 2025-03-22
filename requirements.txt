@@ -9,3 +9,4 @@ celery
 redis
 python-multipart
 python-telegram-bot
+ngrok

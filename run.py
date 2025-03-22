@@ -110,7 +110,7 @@ def is_redis_running():
     """Check if Redis server is already running."""
     try:
         import redis
-        r = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+        r = redis.from_url(os.getenv("REDIS_URL"))
         r.ping()
         return True
     except (redis.exceptions.ConnectionError, ImportError):
@@ -217,7 +217,7 @@ def start_ngrok_tunnel(port):
         
         # Get the public URL from the ngrok API
         try:
-            with urlopen("http://localhost:4040/api/tunnels") as response:
+            with urlopen("http://0.0.0.0:4040/api/tunnels") as response:
                 data = json.loads(response.read().decode())
                 tunnels = data.get('tunnels', [])
                 if tunnels:
@@ -373,7 +373,7 @@ def start_fastapi_app() -> Optional[subprocess.Popen]:
     """Start the FastAPI application."""
     # Get host and port from environment or use defaults
     host = os.getenv("HOST", "0.0.0.0")
-    port = os.getenv("PORT", "8000")
+    port = os.getenv("PORT", "10000")
     
     return run_command(
         ["uvicorn", "main:app", "--host", host, "--port", port],
@@ -455,7 +455,7 @@ def main():
         return 1
     
     # Start services
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("PORT", "10000"))
     
     # Start ngrok tunnel first to establish webhook URL
     start_ngrok_tunnel(port)
@@ -488,7 +488,7 @@ def main():
             logger.info(f"Your webhook URL is: {ngrok_url}")
             logger.info("This URL has been automatically configured for your Telegram bot")
         else:
-            logger.info(f"Local server running at http://localhost:{port}")
+            logger.info(f"Local server running at http://0.0.0.0:{port}")
             logger.info("You'll need to configure an accessible webhook URL for Telegram callbacks")
         
         logger.info("Press Ctrl+C to stop all services")
