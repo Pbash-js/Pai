@@ -1,0 +1,11 @@
+fastapi
+pydantic
+uvicorn
+sqlalchemy
+python-dotenv
+requests
+google-generativeai
+celery
+redis
+python-multipart
+python-telegram-bot

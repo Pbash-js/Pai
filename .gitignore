@@ -4,6 +4,5 @@ __pycache__
 */__pycache__
 celerybeat-schedule.*
 *.db
-*.txt
 frontend/
 .env

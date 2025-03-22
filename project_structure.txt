@@ -1,0 +1,23 @@
+reminder_bot/
+├── main.py               # FastAPI application entry point
+├── config.py             # Configuration settings
+├── database/
+│   ├── __init__.py
+│   ├── models.py         # Database models
+│   └── crud.py           # Database operations
+├── llm/
+│   ├── __init__.py
+│   └── processor.py      # LLM integration
+├── services/
+│   ├── __init__.py
+│   ├── reminder.py       # Reminder service
+│   ├── calendar.py       # Calendar event service
+│   └── scheduler.py      # Notification scheduling
+├── api/
+│   ├── __init__.py
+│   ├── routes.py         # API endpoints
+│   └── schemas.py        # Pydantic models
+├── whatsapp/
+│   ├── __init__.py
+│   └── client.py         # WhatsApp API client
+└── requirements.txt      # Project dependencies
