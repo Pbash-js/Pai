@@ -25,6 +25,7 @@ import json
 from urllib.request import urlopen
 from contextlib import contextmanager
 from typing import List, Optional
+import uvicorn
 
 # Configure logging
 logging.basicConfig(
@@ -177,68 +178,68 @@ def start_redis_server():
     logger.info("Skipping Redis server start - using external Redis on Render")
     return None
 
-
-def start_ngrok_tunnel(port):
-    """Start ngrok tunnel to expose the local server to the internet."""
-    global ngrok_process, ngrok_url
+#Disabling ngrok tunnel on Render, to use Render provided URL
+# def start_ngrok_tunnel(port):
+#     """Start ngrok tunnel to expose the local server to the internet."""
+#     global ngrok_process, ngrok_url
     
-    # Skip if in Docker and not explicitly requested to use ngrok
-    if is_docker() and not os.getenv("USE_NGROK", "").lower() in ("true", "1", "yes"):
-        logger.info("Running in Docker - skipping ngrok tunnel unless USE_NGROK is set")
-        return None
+#     # Skip if in Docker and not explicitly requested to use ngrok
+#     if is_docker() and not os.getenv("USE_NGROK", "").lower() in ("true", "1", "yes"):
+#         logger.info("Running in Docker - skipping ngrok tunnel unless USE_NGROK is set")
+#         return None
     
-    ngrok_executable = find_ngrok_executable()
-    logger.info(f"Starting ngrok tunnel using {ngrok_executable}")
+#     ngrok_executable = find_ngrok_executable()
+#     logger.info(f"Starting ngrok tunnel using {ngrok_executable}")
     
-    try:
-        # Start ngrok process
-        ngrok_process = subprocess.Popen(
-            [ngrok_executable, "http", str(port), "--log=stdout"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
-        processes.append(ngrok_process)
+#     try:
+#         # Start ngrok process
+#         ngrok_process = subprocess.Popen(
+#             [ngrok_executable, "http", str(port), "--log=stdout"],
+#             stdout=subprocess.PIPE,
+#             stderr=subprocess.PIPE,
+#             text=True,
+#             bufsize=1,
+#             universal_newlines=True
+#         )
+#         processes.append(ngrok_process)
         
-        # Start thread to read and log output
-        def log_output(stream, level):
-            for line in stream:
-                logger.log(level, f"[ngrok] {line.strip()}")
-                if stop_event.is_set():
-                    break
+#         # Start thread to read and log output
+#         def log_output(stream, level):
+#             for line in stream:
+#                 logger.log(level, f"[ngrok] {line.strip()}")
+#                 if stop_event.is_set():
+#                     break
         
-        threading.Thread(target=log_output, args=(ngrok_process.stdout, logging.INFO), daemon=True).start()
-        threading.Thread(target=log_output, args=(ngrok_process.stderr, logging.ERROR), daemon=True).start()
+#         threading.Thread(target=log_output, args=(ngrok_process.stdout, logging.INFO), daemon=True).start()
+#         threading.Thread(target=log_output, args=(ngrok_process.stderr, logging.ERROR), daemon=True).start()
         
-        # Give ngrok a moment to start
-        time.sleep(2)
+#         # Give ngrok a moment to start
+#         time.sleep(2)
         
-        # Get the public URL from the ngrok API
-        try:
-            with urlopen("http://0.0.0.0:4040/api/tunnels") as response:
-                data = json.loads(response.read().decode())
-                tunnels = data.get('tunnels', [])
-                if tunnels:
-                    ngrok_url = tunnels[0]['public_url']
-                    logger.info(f"ngrok tunnel established: {ngrok_url}")
+#         # Get the public URL from the ngrok API
+#         try:
+#             with urlopen("http://0.0.0.0:4040/api/tunnels") as response:
+#                 data = json.loads(response.read().decode())
+#                 tunnels = data.get('tunnels', [])
+#                 if tunnels:
+#                     ngrok_url = tunnels[0]['public_url']
+#                     logger.info(f"ngrok tunnel established: {ngrok_url}")
                     
-                    # Set environment variable for webhook URL
-                    os.environ["WEBHOOK_URL"] = ngrok_url
-                    logger.info(f"Set WEBHOOK_URL environment variable to {ngrok_url}")
+#                     # Set environment variable for webhook URL
+#                     os.environ["WEBHOOK_URL"] = ngrok_url
+#                     logger.info(f"Set WEBHOOK_URL environment variable to {ngrok_url}")
                     
-                    return ngrok_process
-                else:
-                    logger.error("No ngrok tunnels found")
-                    return None
-        except Exception as e:
-            logger.error(f"Failed to get ngrok URL: {e}")
-            return None
+#                     return ngrok_process
+#                 else:
+#                     logger.error("No ngrok tunnels found")
+#                     return None
+#         except Exception as e:
+#             logger.error(f"Failed to get ngrok URL: {e}")
+#             return None
             
-    except Exception as e:
-        logger.error(f"Failed to start ngrok: {e}")
-        return None
+#     except Exception as e:
+#         logger.error(f"Failed to start ngrok: {e}")
+#         return None
 
 def configure_telegram_webhook(webhook_url):
     """Configure Telegram webhook using the TelegramWebhookManager."""
@@ -369,16 +370,14 @@ def start_celery_beat() -> Optional[subprocess.Popen]:
         "Celery Beat"
     )
 
-def start_fastapi_app() -> Optional[subprocess.Popen]:
-    """Start the FastAPI application."""
-    # Get host and port from environment or use defaults
-    host = os.getenv("HOST", "0.0.0.0")
-    port = os.getenv("PORT", "10000")
+def start_fastapi_app():
+    """Start FastAPI app inside main process (required by Render)."""
+    host = "0.0.0.0"
+    port = int(os.getenv("PORT", "10000"))
+    logger.info(f"Starting FastAPI on {host}:{port}")
     
-    return run_command(
-        ["uvicorn", "main:app", "--host", host, "--port", port],
-        "FastAPI App"
-    )
+    uvicorn.run("main:app", host=host, port=port)
+
 
 def load_env_file():
     """Load environment variables from .env file if present."""
@@ -457,23 +456,23 @@ def main():
     # Start services
     port = int(os.getenv("PORT", "10000"))
     
-    # Start ngrok tunnel first to establish webhook URL
-    start_ngrok_tunnel(port)
+    # # Start ngrok tunnel first to establish webhook URL
+    # start_ngrok_tunnel(port)
     
-    # Configure Telegram webhook if ngrok URL is available
-    if ngrok_url and not is_docker():
-        webhook_configured = configure_telegram_webhook(ngrok_url)
-        if webhook_configured:
-            logger.info("Telegram webhook configured successfully")
-        else:
-            logger.warning("Telegram webhook configuration failed, continuing startup")
+    # # Configure Telegram webhook if ngrok URL is available
+    # if ngrok_url and not is_docker():
+    #     webhook_configured = configure_telegram_webhook(ngrok_url)
+    #     if webhook_configured:
+    #         logger.info("Telegram webhook configured successfully")
+    #     else:
+    #         logger.warning("Telegram webhook configuration failed, continuing startup")
     
     # Start the application services
     worker = start_celery_worker()
     beat = start_celery_beat()
-    app = start_fastapi_app()
+    start_fastapi_app()
     
-    if not all([worker, beat, app]):
+    if not all([worker, beat]):
         logger.error("Failed to start all services. Cleaning up...")
         stop_event.set()
         cleanup()
@@ -497,7 +496,6 @@ def main():
             # Check if any process has terminated unexpectedly
             if not check_process_health(worker, "Celery Worker") or \
                not check_process_health(beat, "Celery Beat") or \
-               not check_process_health(app, "FastAPI App") or \
                (ngrok_process and not check_process_health(ngrok_process, "ngrok")):
                 logger.error("One or more services have terminated unexpectedly")
                 stop_event.set()
