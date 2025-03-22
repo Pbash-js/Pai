@@ -116,60 +116,67 @@ def is_redis_running():
     except (redis.exceptions.ConnectionError, ImportError):
         return False
 
-def start_redis_server():
-    """Start Redis server if it's not already running."""
-    global redis_process
+#Disabling Redis server start on Render
+# def start_redis_server():
+#     """Start Redis server if it's not already running."""
+#     global redis_process
     
-    # Skip if in Docker (assume Redis is managed separately)
-    if is_docker():
-        logger.info("Running in Docker - assuming Redis is managed by Docker Compose")
-        return None
+#     # Skip if in Docker (assume Redis is managed separately)
+#     if is_docker():
+#         logger.info("Running in Docker - assuming Redis is managed by Docker Compose")
+#         return None
         
-    # Skip if Redis is already running
-    if is_redis_running():
-        logger.info("Redis server is already running")
-        return None
+#     # Skip if Redis is already running
+#     if is_redis_running():
+#         logger.info("Redis server is already running")
+#         return None
     
-    redis_executable = find_redis_executable()
-    logger.info(f"Starting Redis server using {redis_executable}")
+#     redis_executable = find_redis_executable()
+#     logger.info(f"Starting Redis server using {redis_executable}")
     
-    try:
-        redis_process = subprocess.Popen(
-            [redis_executable],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
-        processes.append(redis_process)
+#     try:
+#         redis_process = subprocess.Popen(
+#             [redis_executable],
+#             stdout=subprocess.PIPE,
+#             stderr=subprocess.PIPE,
+#             text=True,
+#             bufsize=1,
+#             universal_newlines=True
+#         )
+#         processes.append(redis_process)
         
-        # Start threads to read and log output
-        def log_output(stream, level):
-            for line in stream:
-                logger.log(level, f"[Redis] {line.strip()}")
-                if stop_event.is_set():
-                    break
+#         # Start threads to read and log output
+#         def log_output(stream, level):
+#             for line in stream:
+#                 logger.log(level, f"[Redis] {line.strip()}")
+#                 if stop_event.is_set():
+#                     break
         
-        threading.Thread(target=log_output, args=(redis_process.stdout, logging.INFO), daemon=True).start()
-        threading.Thread(target=log_output, args=(redis_process.stderr, logging.ERROR), daemon=True).start()
+#         threading.Thread(target=log_output, args=(redis_process.stdout, logging.INFO), daemon=True).start()
+#         threading.Thread(target=log_output, args=(redis_process.stderr, logging.ERROR), daemon=True).start()
         
-        # Give Redis a moment to start
-        time.sleep(2)
+#         # Give Redis a moment to start
+#         time.sleep(2)
         
-        # Verify Redis is now running
-        if is_redis_running():
-            logger.info("Redis server started successfully")
-            return redis_process
-        else:
-            logger.error("Redis server failed to start properly")
-            if redis_process.poll() is None:
-                redis_process.terminate()
-            return None
+#         # Verify Redis is now running
+#         if is_redis_running():
+#             logger.info("Redis server started successfully")
+#             return redis_process
+#         else:
+#             logger.error("Redis server failed to start properly")
+#             if redis_process.poll() is None:
+#                 redis_process.terminate()
+#             return None
             
-    except Exception as e:
-        logger.error(f"Failed to start Redis server: {e}")
-        return None
+#     except Exception as e:
+#         logger.error(f"Failed to start Redis server: {e}")
+#         return None
+
+def start_redis_server():
+    """Disable starting Redis server on Render."""
+    logger.info("Skipping Redis server start - using external Redis on Render")
+    return None
+
 
 def start_ngrok_tunnel(port):
     """Start ngrok tunnel to expose the local server to the internet."""
