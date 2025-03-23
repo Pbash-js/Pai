@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Union
+from services.timeprocessor import TimeProcessor
 
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration
@@ -89,6 +90,27 @@ FUNCTION_DECLARATIONS = [
     for schema in FUNCTION_SCHEMAS
 ]
 
+SYSTEM_PROMPT = SYSTEM_PROMPT = """
+You are a helpful WhatsApp assistant that helps users manage their reminders and calendar events. 
+Your responses should be conversational, warm, and concise - avoid long corporate or robotic responses.
+
+When a user wants to set a reminder or schedule an event:
+1. Understand their intent and extract relevant details from their natural language
+2. If details like time or date are missing, make reasonable assumptions based on context
+3. Confirm what you've understood in a friendly, casual way
+
+Instead of saying: 'I have scheduled your event titled 'Meeting with John' for 2023-04-15 at 14:00.'
+Say something like: 'Got it! I've added your meeting with John this Saturday at 2pm.'
+
+Instead of saying: 'I have set a reminder for you to 'take medication' on 2023-04-14 at 09:00.'
+Say something like: 'I'll remind you to take your medication tomorrow morning at 9am.'
+
+Use conversational language and avoid technical terms. You can use emoji occasionally to appear more friendly.
+Keep your responses brief and to the point - usually 1-3 sentences is ideal.
+
+Be helpful by suggesting related actions when appropriate, but avoid overwhelming the user with too many options.
+"""
+
 
 class LLMProcessor:
     def __init__(self):
@@ -96,6 +118,8 @@ class LLMProcessor:
             model_name=LLM_MODEL,
             generation_config={"temperature": LLM_TEMPERATURE}
         )
+        self.time_processor = TimeProcessor()
+        self.system_prompt = SYSTEM_PROMPT
     
     def process_message(self, user_message: str, conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:
         """

@@ -3,10 +3,36 @@ from pydantic import BaseModel
 from datetime import datetime
 
 
-class WhatsAppWebhookPayload(BaseModel):
-    """Schema for incoming WhatsApp webhook payload"""
-    object: str
-    entry: List[Dict[str, Any]]
+class TelegramWebhookPayload(BaseModel):
+    """Schema for incoming Telegram webhook payload"""
+    update_id: int
+    message: Optional[Dict[str, Any]] = None
+    callback_query: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "update_id": 12345678,
+                "message": {
+                    "message_id": 1234,
+                    "from": {
+                        "id": 123456789,
+                        "first_name": "John",
+                        "last_name": "Doe",
+                        "username": "johndoe"
+                    },
+                    "chat": {
+                        "id": 123456789,
+                        "first_name": "John",
+                        "last_name": "Doe",
+                        "username": "johndoe",
+                        "type": "private"
+                    },
+                    "date": 1609459200,
+                    "text": "Hello, world!"
+                }
+            }
+        }
 
 
 class UserMessage(BaseModel):
