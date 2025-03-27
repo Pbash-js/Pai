@@ -1,13 +1,18 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from datetime import datetime
-
+#changes
+from typing import List
+#changes
 
 class TelegramWebhookPayload(BaseModel):
     """Schema for incoming Telegram webhook payload"""
     update_id: int
     message: Optional[Dict[str, Any]] = None
     callback_query: Optional[Dict[str, Any]] = None
+    #changes
+    photo: Optional[List[Dict[str, Any]]] = None
+    #changes
     
     class Config:
         schema_extra = {

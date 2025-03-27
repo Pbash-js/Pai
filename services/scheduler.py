@@ -7,7 +7,8 @@ from celery.schedules import crontab
 
 from config import REDIS_URL
 from database import crud, SessionLocal
-from whatsapp.client import WhatsAppClient
+#changes
+from whatsapp.client import TelegramClient
 from services.reminder import ReminderService
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def check_reminders():
     """
     Check for due reminders and send notifications.
     """
-    logger.info("Checking for due reminders...")
+    #logger.info("Checking for due reminders...")
     
     try:
         # Get database session
@@ -44,20 +45,19 @@ def check_reminders():
         
         # Create services
         reminder_service = ReminderService(db)
-        whatsapp_client = WhatsAppClient()
+        telegram_client = TelegramClient()
         
         # Process due reminders
         notifications = reminder_service.process_due_reminders()
         
         # Send notifications
         for notification in notifications:
-            logger.info(f"Sending notification to {notification['phone_number']}: {notification['message']}")
-            whatsapp_client.send_message(
-                recipient_phone=notification["phone_number"],
+            #logger.info(f"Sending notification to {notification['phone_number']}: {notification['message']}")
+            telegram_client.send_message(
                 message=notification["message"]
             )
         
-        logger.info(f"Processed {len(notifications)} reminder notifications")
+        #logger.info(f"Processed {len(notifications)} reminder notifications")
     
     except Exception as e:
         logger.error(f"Error checking reminders: {e}")

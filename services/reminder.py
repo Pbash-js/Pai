@@ -7,6 +7,11 @@ from database import crud
 from database.models import RepeatFrequency
 from llm.processor import LLMProcessor
 
+#changes
+import logging
+logger = logging.getLogger(__name__)
+#changes
+
 class ReminderService:
     """Service for managing user reminders."""
     
@@ -55,6 +60,7 @@ class ReminderService:
                 repeat_interval = interval_mins
         
         # Create reminder
+        logger.info("Setting reminder!!!")
         reminder = crud.create_reminder(
             db=self.db,
             user_id=user_id,
@@ -150,6 +156,7 @@ class ReminderService:
                 "is_recurring": reminder.is_recurring,
                 "repeat_frequency": reminder.repeat_frequency.value if reminder.is_recurring else "none"
             })
+        logger.info("Getting reminder!!!")
         
         return result
     

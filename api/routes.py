@@ -13,6 +13,18 @@ from telegram.constants import ParseMode
 from telegram.helpers import escape_markdown
 from api.schemas import TelegramWebhookPayload
 import os
+#changes
+import json
+from services.timeprocessor import TimeProcessor
+import random
+time_processor = TimeProcessor()
+friendly_phrases = [
+    "Got it! 👍",
+    "All set! ✅",
+    "Done! 😊",
+    "No worries, I've added it! 📅"
+]
+##changes
 
 logger = logging.getLogger(__name__)
 
@@ -52,24 +64,40 @@ async def webhook(payload: TelegramWebhookPayload, db: Session = Depends(get_db)
         )
 
         # Process message with LLM
-        llm_response = llm_processor.process_message(message_text, conversation_history)
+        if update.message.photo:
+            # Get largest size photo
+            photo_file = update.message.photo[-1].get_file()
+            photo_url = photo_file.file_path
+            
+            # Forward photo URL to LLM processor
+            llm_response = llm_processor.process_multimodal_message(
+                message_text, photo_url, conversation_history
+            )
+        else:
+            logger.info(f"Sending message - {message_text}")
+            llm_response = llm_processor.process_message(message_text, conversation_history)
+            logger.info(f"Got response - {llm_response}")
 
+
+        # Ensure function_calls is a list
+        function_calls = llm_response.get("function_calls", [])
+        
         # Execute any function calls
         results = []
-        for func_call in llm_response.get("function_calls", []):
+        for func_call in function_calls:
             result = execute_function_call(db, user.id, func_call)
             results.append(result)
 
         # Generate response text
-        response_text = llm_response["response_text"]
+        response_text = llm_response.get("response_text", "I'm not sure how to respond.")
 
         # If we have function results, append them
         if results:
             for result in results:
                 if result.get("status") == "success":
-                    continue
+                    response_text += f"\n\n{random.choice(friendly_phrases)}"
                 elif result.get("status") == "error":
-                    response_text += f"\n\n{result.get('message', 'An error occurred.')}"
+                    response_text += f"\n\nOops! {result.get('message', 'Something went wrong.')}"
 
         # Add bot response to history
         crud.update_session_history(
@@ -85,11 +113,12 @@ async def webhook(payload: TelegramWebhookPayload, db: Session = Depends(get_db)
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
+        # Return a simple dict that can be easily serialized
         return {"status": "success"}
 
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
-        return Response(status_code=500)
+        logger.error(f"Error processing webhook: {e}", exc_info=True)
+        return Response(content=json.dumps({"error": str(e)}), status_code=500, media_type="application/json")
 
 
 def execute_function_call(db: Session, user_id: int, func_call: Dict[str, Any]) -> Dict[str, Any]:
@@ -99,11 +128,25 @@ def execute_function_call(db: Session, user_id: int, func_call: Dict[str, Any]) 
 
     reminder_service = ReminderService(db)
     calendar_service = CalendarService(db)
-
+    logger.info(f"Executing function {function_name}")
     try:
+        # changes Preprocess natural date/time inputs
+        if function_name in ["setReminder", "scheduleEvent", "setRecurringReminder"]:
+            natural_time = time_processor.parse_natural_time(args.get("message", "") + " " + args.get("title", ""))
+            if natural_time["date"]:
+                args["date"] = natural_time["date"]
+            if natural_time["time"]:
+                args["time"] = natural_time["time"]
+            if natural_time["recurrence"]:
+                args["repeat"] = natural_time["recurrence"]
+        # changes
+
         if function_name == "setReminder":
             return reminder_service.set_reminder(user_id, args)
-
+        #changes
+        if function_name == "getReminders":
+            return reminder_service.get_upcoming_reminders(user_id, args)
+        #changes
         elif function_name == "scheduleEvent":
             return calendar_service.schedule_event(user_id, args)
 

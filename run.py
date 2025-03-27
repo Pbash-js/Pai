@@ -29,7 +29,8 @@ from typing import List, Optional
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    handlers=[logging.StreamHandler()],
+    encoding='utf-8'
 )
 logger = logging.getLogger("launcher")
 
@@ -298,19 +299,22 @@ def run_command(cmd: List[str], name: str) -> Optional[subprocess.Popen]:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            universal_newlines=True
+            universal_newlines=True,
+            encoding="utf-8"
         )
         processes.append(process)
         
         # Start threads to read and log output
         def log_output(stream, level):
             for line in stream:
+                line = line.encode("utf-8", errors="replace")
                 logger.log(level, f"[{name}] {line.strip()}")
                 if stop_event.is_set():
                     break
         
         threading.Thread(target=log_output, args=(process.stdout, logging.INFO), daemon=True).start()
         threading.Thread(target=log_output, args=(process.stderr, logging.ERROR), daemon=True).start()
+        #changes
         
         return process
     except Exception as e:
@@ -320,14 +324,14 @@ def run_command(cmd: List[str], name: str) -> Optional[subprocess.Popen]:
 def start_celery_worker() -> Optional[subprocess.Popen]:
     """Start the Celery worker process."""
     return run_command(
-        ["celery", "-A", "services.scheduler.celery_app", "worker", "--loglevel=info","--pool=solo"],
+        ["celery", "-A", "services.scheduler.celery_app", "worker","--pool=solo"],
         "Celery Worker"
     )
 
 def start_celery_beat() -> Optional[subprocess.Popen]:
     """Start the Celery beat scheduler."""
     return run_command(
-        ["celery", "-A", "services.scheduler.celery_app", "beat", "--loglevel=info"],
+        ["celery", "-A", "services.scheduler.celery_app", "beat"],
         "Celery Beat"
     )
 
@@ -440,6 +444,20 @@ def main():
         if ngrok_url:
             logger.info(f"Your webhook URL is: {ngrok_url}")
             logger.info("Configure this URL in your WhatsApp Business API settings")
+            #changes autoconfigure ngrok url - 
+            try:
+
+                cmd = [
+                    "curl",
+                    f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/setWebhook?url={ngrok_url}/api/webhook"
+                ]
+
+                run_command(cmd, "autoconfigure ngrok")
+
+            except Exception as e:
+                logger.error(f"Failed to autoconfigure webhook URL: {e}")
+                logger.info("You'll need to configure the webhook URL manually ")
+            #changes
         else:
             logger.info(f"Local server running at http://localhost:{port}")
             logger.info("You'll need to configure an accessible webhook URL for WhatsApp callbacks")
