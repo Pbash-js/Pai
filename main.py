@@ -3,6 +3,7 @@ import uvicorn
 from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from starlette.middleware.sessions import SessionMiddleware
 
 from api.routes import router as api_router
 from database import init_db
@@ -47,6 +48,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SessionMiddleware, secret_key="your-secret-key") # Add middleware to the app
 
 # Include routers
 app.include_router(api_router, prefix="/api")

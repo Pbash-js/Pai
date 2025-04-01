@@ -3,6 +3,8 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Union, Tuple
 from services.timeprocessor import TimeProcessor
+import aiofiles
+import asyncio
 from google import genai
 from google.genai import types
 import logging
@@ -34,7 +36,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "getReminder",
-        "description": "Gets all upcoming reminders for user.",
+        "description": "Gets next upcoming reminders for user.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -90,6 +92,27 @@ FUNCTION_SCHEMAS = [
             },
             "required": ["message", "interval"]
         }
+    },
+    {
+        "name": "addNote",
+        "description": "Adds a note to the user's notes.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "note": {"type": "string", "description": "Content of the note"}
+            },
+            "required": ["note"]
+        }
+    },
+    {
+        "name": "getNotes",
+        "description": "Fetches notes by the user.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "note": {"type": "string", "description": "Content of the note"}
+            }
+        }
     }
 ]
 
@@ -107,9 +130,18 @@ FUNCTION_DECLARATIONS = [
 TOOLS = types.Tool(
     function_declarations=FUNCTION_DECLARATIONS
 )
-SYSTEM_PROMPT = """
-You are a helpful Telegram assistant named Pai. You are created by a cool company named Pragmatech. You help users manage their day to day activities like reminders, events. 
-Your responses should be conversational, warm, and concise - avoid long corporate or robotic responses.
+
+
+def get_dynamic_system_prompt():
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    current_time = datetime.now().strftime('%H:%M')
+    return f"""
+You are a helpful Telegram assistant named Pai. You are created by a cool company named Pragmatech. 
+You help users manage their day to day activities like reminders, events. 
+
+IMPORTANT CONTEXT:
+- Today's date is {current_date}
+- Current time is {current_time}
 
 When a user wants you to perform a specific task:
 1. Understand their intent and extract relevant details from their natural language
@@ -141,16 +173,19 @@ IMPORTANT:
  - If the user asks to set a reminder, use the setReminder function.
  - If the user asks to set a reoccuring reminder, use the setRecurringReminder function.
  - Only use the functions provided. Do not make up functions.
+ - If function calls are identified, make sure to add accompanying text with the function.
 
  EXAMPLE:
  User: "Remind me to eat eggs tomorrow at 10 am"
- REQUIRED ACTION: Call setReminder function with:
+ Model: "Sure! Will remind you to eat eggs tomorrow at 10 AM"
+ Function call: Call setReminder function with:
  - message: "eat eggs"
  - time: "10:00"
  - date: "2025-03-28"
 
-  EXAMPLE:
+ EXAMPLE:
  User: "Remind me to check the mail in 5 minutes"
+ Model: "Sure! Will remind you to check the mail in 5 minutes"
  REQUIRED ACTION: Call setReminder function with:
  - message: "Check mail"
  - time: "10:05"
@@ -158,6 +193,7 @@ IMPORTANT:
 
  EXAMPLE:
  User: "Schedule meeting with bob next week tuesday at 2pm"
+ Model: "Got it! I've scheduled your meeting with Bob for next Tuesday at 2 PM."
  REQUIRED ACTION: Call scheduleEvent function with:
  - title: "meeting with bob"
  - date: "2025-04-01"
@@ -165,46 +201,135 @@ IMPORTANT:
 
  EXAMPLE:
  User: "What events do I have upcoming?"
+ Model: "You have a meeting with Bob on April 1st at 2 PM."
  REQUIRED ACTION: Call getUpcomingEvents function.
 """
-
-config = types.GenerateContentConfig(tools=[TOOLS],temperature=LLM_TEMPERATURE,system_instruction=SYSTEM_PROMPT)
 
 class LLMProcessor:
     def __init__(self):
         # Configure the client
+        dynamic_system_prompt = get_dynamic_system_prompt()
+        config = types.GenerateContentConfig(tools=[TOOLS], temperature=LLM_TEMPERATURE, system_instruction=dynamic_system_prompt)
         self.client = genai.Client(api_key=GEMINI_API_KEY)
-        self.chat=self.client.chats.create(model=LLM_MODEL,config=config)
         self.time_processor = TimeProcessor()
-        self.system_prompt = SYSTEM_PROMPT
+        
+        # Store the model and config for creating chats in async methods
+        self.model = LLM_MODEL
+        self.config = config
+        
+        # Create a semaphore to limit concurrent API calls if needed
+        self.semaphore = asyncio.Semaphore(5)  # Adjust the value based on API rate limits
 
-    def process_message(self, user_message: str, conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:        
-        # Process current message
+    async def process_message(self, user_message: str, conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Process a text message asynchronously"""
         logger.info(f"Sending message to LLM: {user_message}")
-        response = self.chat.send_message(user_message)
-        logger.info(f"gOT RESPONSE FROM LLM: {response}")
-        return self._process_response(response)
+        
+        async with self.semaphore:
+            # Create a new chat session for each request to ensure thread safety
+            chat = self.client.chats.create(model=self.model, config=self.config)
+            
+            # Use asyncio.to_thread to run the blocking API call in a separate thread
+            response = await asyncio.to_thread(chat.send_message, user_message)
+            
+            logger.info(f"Got response from LLM: {response}")
+            
+            return await self._process_response(response)
 
-    # Replace current implementation with:
-    def process_multimodal_message(self, user_message: str, image_url: str, conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:
+    async def process_multimodal_message(self, user_message: str, image_url: str, conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Process a multimodal message with text and image asynchronously"""
         
-        # Process multimodal message
-        with open(image_url, "rb") as image_file:
-            image_part = types.Part(file_data=types.FileData(
-                mime_type="image/jpeg", 
-                data=image_file.read()
-            ))
+        # Create a new chat session for each request
+        chat = self.client.chats.create(model=self.model, config=self.config)
         
-        response = self.chat.send_message([
+        # If this is the first message, send context about current date
+        if len(conversation_history) == 0:
+            await asyncio.to_thread(
+                chat.send_message, 
+                f"Please use the context - current date is {datetime.now().strftime('%Y-%m-%d')}"
+            )
+        
+        # Read the image file asynchronously
+        async with aiofiles.open(image_url, "rb") as image_file:
+            image_data = await image_file.read()
+        
+        # Create the parts for the message
+        image_part = types.Part(file_data=types.FileData(
+            mime_type="image/jpeg", 
+            data=image_data
+        ))
+        
+        parts = [
             types.Part(text=user_message),
             image_part
-        ])
+        ]
         
-        return self._process_response(response)
-    
-    def _process_response(self, response) -> Dict[str, Any]:
+        # Use asyncio.to_thread to run the blocking API call in a separate thread
+        async with self.semaphore:
+            response = await asyncio.to_thread(chat.send_message, parts)
+        
+        return await self._process_response(response)
+
+    async def process_function_result(self, function_calls: List[Dict[str, Any]], function_results: List[Dict[str, Any]], conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Process function results asynchronously"""
+        
+        # Create a new chat session for each request
+        chat = self.client.chats.create(model=self.model, config=self.config)
+        
+        # Prepare the parts
+        parts = []
+        
+        # Add original function calls
+        for func_call in function_calls:
+            parts.append(
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name=func_call["name"],
+                        args=func_call["args"]
+                    )
+                )
+            )
+        
+        # Add function results
+        for result in function_results:
+            # Handle case where result might be a list or dictionary
+            if isinstance(result, list):
+                # If it's a list, convert the first item
+                result = result[0] if result else {}
+            
+            # Ensure result is a dictionary
+            if not isinstance(result, dict):
+                result = {}
+            
+            # Convert result to a standard dictionary that can be serialized
+            function_response = {
+                "status": result.get("status", "unknown"),
+                "message": result.get("message", ""),
+                "details": {k: v for k, v in result.items() if k not in ["status", "message"]}
+            }
+            
+            parts.append(types.Part(text=json.dumps(function_response)))
+        
+        # Send the contents to the LLM using asyncio.to_thread
+        logger.info("Sending function results back to LLM for processing")
+        
+        try:
+            async with self.semaphore:
+                response = await asyncio.to_thread(chat.send_message, parts)
+            return await self._process_response(response)
+        except Exception as e:
+            logger.error(f"Error sending function results to LLM: {e}")
+            return {
+                "response_text": "I encountered an issue processing your request.",
+                "function_calls": []
+            }
+
+    async def _process_response(self, response) -> Dict[str, Any]:
+        """Process the response from the LLM asynchronously"""
+        
+        # This function doesn't do any I/O, so we can just make it async
+        # and use the same processing logic
         result = {
-            "response_text": response.text,
+            "response_text": response.text if response.text else "",
             "function_calls": []
         }
 
@@ -219,12 +344,13 @@ class LLMProcessor:
                             if hasattr(part, 'function_call') and part.function_call:
                                 function_call = part.function_call
                                 try:
+                                    result["response_text"] = f"{result.get('response_text', '')}\n\n{function_call.name}"
                                     # Convert the dictionary to a JSON string
                                     args_json = json.dumps(function_call.args) if function_call.args else "{}"
                                     args = json.loads(args_json)
                                     result["function_calls"].append({
                                         "name": function_call.name,
-                                        "args": args
+                                        "args": args #this would be a dictionary
                                     })
                                 except (json.JSONDecodeError, TypeError) as e:
                                     logger.error(f"Error parsing function call args: {e}")
@@ -236,6 +362,7 @@ class LLMProcessor:
     
     def parse_date_range(self, date_range: str) -> int:
         """Convert a date range string to number of days."""
+        # This method doesn't contain I/O operations, so it can remain synchronous
         if "today" in date_range.lower():
             return 0
         elif "tomorrow" in date_range.lower():
@@ -268,6 +395,7 @@ class LLMProcessor:
         Returns:
             Tuple of (interval_minutes, frequency_type)
         """
+        # This method doesn't contain I/O operations, so it can remain synchronous
         interval = interval.lower()
         if "minute" in interval:
             try:

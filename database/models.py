@@ -3,10 +3,10 @@ from enum import Enum as PyEnum
 from typing import List, Optional
 
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, Enum, Text
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
-Base = declarative_base()
+# Import the Base from the new async init
+from . import Base
 
 
 class RepeatFrequency(str, PyEnum):
@@ -22,6 +22,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     phone_number = Column(String, unique=True, index=True)
+    google_id = Column(String, unique=True, index=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_active = Column(DateTime, default=datetime.utcnow)
     

@@ -2,3 +2,10 @@ Local deployment changes
 - Made API library equivalent to prod for telegram deployment
 - Added Timeprocessor.py
 - Added System prompt to LLM processor library
+
+31/3/2025
+Changed database implementation to use async operations
+Added google login flow
+Using httpx instead of requests for async
+aiofiles
+asyncio to sleep specific thread

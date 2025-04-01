@@ -144,7 +144,10 @@ class ReminderService:
         Returns:
             List of reminders as dictionaries
         """
-        days = self.llm_processor.parse_date_range(date_range)
+        if not date_range:
+            days = 3
+        else:
+            days = self.llm_processor.parse_date_range(date_range)
         reminders = crud.get_upcoming_reminders(db=self.db, user_id=user_id, days=days)
         
         result = []

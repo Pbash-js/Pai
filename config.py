@@ -16,7 +16,7 @@ WHATSAPP_BUSINESS_ACCOUNT_ID = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID")
 
 # Database settings
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/reminder_bot.db")
-
+ASYNC_DATABASE_URL = os.getenv("ASYNC_DATABASE_URL", f"sqlite+aiosqlite:///{BASE_DIR}/reminder_bot.db")
 # LLM settings
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.0-flash-lite")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))

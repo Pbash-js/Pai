@@ -1,31 +1,39 @@
-from sqlalchemy import create_engine, inspect
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import inspect
+import asyncio
 
-from config import DATABASE_URL
+from config import ASYNC_DATABASE_URL
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Create async engine instead of sync engine
+engine = create_async_engine(ASYNC_DATABASE_URL)
+AsyncSessionLocal = sessionmaker(
+    class_=AsyncSession,
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
 Base = declarative_base()
 
-# Dependency to get DB session
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# Async dependency to get DB session
+async def get_db():
+    async with AsyncSessionLocal() as db:
+        try:
+            yield db
+        finally:
+            await db.close()
 
-
-def init_db():
-    """Initialize the database by creating all tables."""
+async def init_db():
+    """Initialize the database by creating all tables asynchronously."""
     from .models import Base
-    Base.metadata.create_all(bind=engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-
-def check_db_initialized():
-    """Check if database tables have been created."""
-    inspector = inspect(engine)
-    table_names = inspector.get_table_names()
-    # Return True if any tables exist in the database
-    return len(table_names) > 0
+async def check_db_initialized():
+    """Check if database tables have been created asynchronously."""
+    async with engine.begin() as conn:
+        # We need to use run_sync because inspect is not async-aware
+        inspector = await conn.run_sync(lambda sync_conn: inspect(sync_conn))
+        table_names = inspector.get_table_names()
+        # Return True if any tables exist in the database
+        return len(table_names) > 0
