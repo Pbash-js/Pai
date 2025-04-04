@@ -1,77 +1,84 @@
-##File changed to follow google generative ai example
+# llm/processor.py
+
 import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Union, Tuple
-from services.timeprocessor import TimeProcessor
+# << -- Remove TimeProcessor import if Notion handles time/date properties -->>
+# from services.timeprocessor import TimeProcessor
 import aiofiles
 import asyncio
-from google import genai
+# <<-- Use google.generativeai instead of google.genai -->>
+import google.genai as genai
 from google.genai import types
+# <<-- End google.generativeai import -->>
+import logging
+# <<-- Adjust config import path if necessary -->>
+from config import GEMINI_API_KEY, LLM_MODEL, LLM_TEMPERATURE
+# <<-- End config import adjustment -->>
+import re
+
+# llm/processor.py
 import logging
 from config import GEMINI_API_KEY, LLM_MODEL, LLM_TEMPERATURE
+import re # Import re for parse_date_range fallback
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
 logger = logging.getLogger(__name__)
 
-# Define function schemas
+# --- Define ALL Function Schemas ---
 FUNCTION_SCHEMAS = [
+    # --- Existing Schemas (Keep Them - ensure they are correct) ---
     {
         "name": "setReminder",
-        "description": "Sets a reminder for the user.",
+        "description": "Sets a reminder using the bot's internal reminder system.",
         "parameters": {
             "type": "object",
             "properties": {
                 "message": {"type": "string", "description": "Reminder message"},
                 "time": {"type": "string", "description": "Time for the reminder (HH:MM format)"},
                 "date": {"type": "string", "description": "Date for the reminder (YYYY-MM-DD format)"},
-                "repeat": {"type": "string", "description": "Repeat frequency (e.g., 'daily', 'weekly')"}
+                "repeat": {"type": "string", "description": "Repeat frequency (e.g., 'daily', 'weekly', 'none')"}
             },
             "required": ["message", "time", "date"]
         }
     },
     {
         "name": "getReminder",
-        "description": "Gets next upcoming reminders for user.",
+        "description": "Gets upcoming reminders from the bot's internal system.",
         "parameters": {
             "type": "object",
             "properties": {
-                "date_range": {"type": "string", "description": "Date range for events (e.g., 'next 7 days')"}
+                "date_range": {"type": "string", "description": "Date range (e.g., 'today', 'next 3 days', 'this week')"}
             }
         }
     },
     {
         "name": "scheduleEvent",
-        "description": "Schedules a calendar event.",
+        "description": "Schedules a calendar event using the bot's internal calendar system.",
         "parameters": {
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "Title of the event"},
-                "date": {"type": "string", "description": "Date of the event (YYYY-MM-DD format)"},
-                "time": {"type": "string", "description": "Time of the event (HH:MM format)"},
-                "location": {"type": "string", "description": "Location of the event"},
-                "participants": {"type": "array", "items": {"type": "string"}, "description": "List of participants"}
+                "date": {"type": "string", "description": "Date (YYYY-MM-DD)"},
+                "time": {"type": "string", "description": "Time (HH:MM)"},
+                "location": {"type": "string", "description": "Location (optional)"},
+                "participants": {"type": "array", "items": {"type": "string"}, "description": "List of participant names (optional)"}
             },
             "required": ["title", "date", "time"]
         }
     },
     {
         "name": "getUpcomingEvents",
-        "description": "Retrieves upcoming events for the user.",
+        "description": "Retrieves upcoming events from the bot's internal calendar.",
         "parameters": {
             "type": "object",
             "properties": {
-                "date_range": {"type": "string", "description": "Date range for events (e.g., 'next 7 days')"}
+                "date_range": {"type": "string", "description": "Date range (e.g., 'today', 'next 7 days')"}
             }
         }
     },
     {
         "name": "cancelEvent",
-        "description": "Cancels a scheduled event.",
+        "description": "Cancels a scheduled event from the bot's internal calendar.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -80,138 +87,154 @@ FUNCTION_SCHEMAS = [
             "required": ["event_title"]
         }
     },
+    # --- Notion Functions ---
     {
-        "name": "setRecurringReminder",
-        "description": "Sets a recurring reminder.",
+        "name": "createNotionNote",
+        "description": "Creates a new note page in Notion under a specified parent page.",
         "parameters": {
             "type": "object",
             "properties": {
-                "message": {"type": "string", "description": "Reminder message"},
-                "interval": {"type": "string", "description": "Time interval (e.g., 'every 2 hours')"},
-                "start_time": {"type": "string", "description": "Start time (HH:MM format)"}
+                "title": {"type": "string", "description": "The title for the new Notion note page."},
+                "content": {"type": "string", "description": "The main text content for the note."},
+                "parent_page_title": {"type": "string", "description": "The exact title of the existing Notion page where the new note should be created inside."}
             },
-            "required": ["message", "interval"]
+            "required": ["title", "content", "parent_page_title"]
         }
     },
     {
-        "name": "addNote",
-        "description": "Adds a note to the user's notes.",
+        "name": "createNotionTable",
+        "description": "Creates a new table (database) in Notion inside a specified parent page. Define columns using the properties parameter.",
         "parameters": {
             "type": "object",
             "properties": {
-                "note": {"type": "string", "description": "Content of the note"}
+                "title": {"type": "string", "description": "The title for the new Notion table (database)."},
+                "parent_page_title": {"type": "string", "description": "The exact title of the existing Notion page where the new table should be created inside."},
+                # << --- START CORRECTION --- >>
+                "properties_schema": {
+                    "type": "object",
+                    "description": """Defines the columns (properties) for the Notion table. Keys are the desired column names. Values MUST be objects matching the Notion API property schema for the desired type.
+Examples of VALID VALUES for this object:
+- Text column 'Item': {"Item": {"text": {}}}
+- Number column 'Amount': {"Amount": {"number": {"format": "dollar"}}}
+- Date column 'Due Date': {"Due Date": {"date": {}}}
+- Select column 'Status': {"Status": {"select": {"options": [{"name": "To Do"}, {"name": "In Progress"}, {"name": "Done"}]}}}
+- Multi-select column 'Tags': {"Tags": {"multi_select": {"options": [{"name": "Urgent"}, {"name": "Work"}]}}}
+- Checkbox column 'Completed': {"Completed": {"checkbox": {}}}
+NOTE: Do NOT include a 'Title' property definition here; the main 'title' parameter handles the table's primary title column automatically."""
+                    # REMOVED the invalid 'additionalProperties' structure. The description now guides the LLM.
+                }
+                # << --- END CORRECTION --- >>
             },
-            "required": ["note"]
+            "required": ["title", "parent_page_title", "properties_schema"]
         }
     },
     {
-        "name": "getNotes",
-        "description": "Fetches notes by the user.",
+        "name": "addNotionTableRow",
+        "description": "Adds a new row (page) to an existing Notion table (database).",
         "parameters": {
             "type": "object",
             "properties": {
-                "note": {"type": "string", "description": "Content of the note"}
-            }
+                "database_title": {"type": "string", "description": "The exact title of the Notion table (database) to add the row to."},
+                "entry_data": {
+                    "type": "object",
+                    "description": "The data for the new row. Keys should be the exact column names (properties) of the table. Values are the data to insert for that column.",
+                    # Simple type for values - the Notion Service will format them
+                    #"additionalProperties": {"type": "string"}
+                 }
+            },
+            "required": ["database_title", "entry_data"]
         }
     }
 ]
 
-# Convert to Gemini format
-FUNCTION_DECLARATIONS = [
-    types.FunctionDeclaration(
-        name=schema["name"],
-        description=schema["description"],
-        parameters=schema["parameters"]
-    )
-    for schema in FUNCTION_SCHEMAS
-]
+# --- Generate Tool Configuration ---
+try:
+    FUNCTION_DECLARATIONS = [
+        types.FunctionDeclaration(
+            name=schema["name"],
+            description=schema["description"],
+            # Use **schema['parameters'] which works if the dict matches Schema structure
+            parameters=types.Schema(**schema['parameters'])
+        )
+        for schema in FUNCTION_SCHEMAS
+    ]
 
-# Create the tool containing function declarations
-TOOLS = types.Tool(
-    function_declarations=FUNCTION_DECLARATIONS
-)
+    TOOLS = types.Tool(function_declarations=FUNCTION_DECLARATIONS)
+    logger.info("Successfully created Gemini Tool configuration.")
+except Exception as e:
+    # Log the specific schema causing the error if possible
+    problematic_schema_name = "Unknown"
+    for schema in FUNCTION_SCHEMAS:
+        try:
+            types.Schema(**schema['parameters'])
+        except Exception as schema_e:
+            problematic_schema_name = schema.get("name", "Unknown")
+            logger.error(f"Validation failed for schema: {problematic_schema_name}")
+            logger.error(f"Schema details: {schema['parameters']}")
+            logger.error(f"Specific validation error: {schema_e}")
+            break # Stop after first error
 
+    logger.error(f"Error creating Gemini Tool configuration (likely in schema '{problematic_schema_name}'): {e}", exc_info=True)
+    TOOLS = None
 
+# --- System Prompt ---
 def get_dynamic_system_prompt():
+    # ... (Your existing prompt generation logic) ...
+    # Make sure the prompt explains the Notion column schema format clearly.
     current_date = datetime.now().strftime('%Y-%m-%d')
     current_time = datetime.now().strftime('%H:%M')
+    # Include the examples from the schema description in the main prompt if helpful
     return f"""
-You are a helpful Telegram assistant named Pai. You are created by a cool company named Pragmatech. 
-You help users manage their day to day activities like reminders, events. 
+You are a helpful Telegram assistant named Pai, created by Pragmatech.
+You help users manage reminders, events, and notes, leveraging Notion for notes and tables.
 
-IMPORTANT CONTEXT:
-- Today's date is {current_date}
-- Current time is {current_time}
+CONTEXT:
+- Today's date: {current_date}
+- Current time: {current_time}
 
-When a user wants you to perform a specific task:
-1. Understand their intent and extract relevant details from their natural language
-2. If details like time or date are missing, make reasonable assumptions based on context.
-3. Confirm what you've understood in a friendly, casual way
+INSTRUCTIONS:
+1.  **Understand Intent:** Determine if the user wants a simple reminder/event (use internal functions like `setReminder`, `scheduleEvent`) OR if they want to save a note, create a list/table, or track something (use Notion functions like `createNotionNote`, `createNotionTable`, `addNotionTableRow`).
+2.  **Extract Details:** Get specific information (what, when, where, who, column names, data for tables, parent page for Notion items).
+3.  **Assume Reasonably:** If date/time is missing for internal reminders/events, use today or ask. For Notion, the structure or parent location is crucial - ask if unclear.
+4.  **Confirm Casually:** Respond conversationally before executing. Use emoji occasionally. Keep responses brief (1-3 sentences).
+5.  **Function Usage:**
+    *   **ALWAYS** try to use a function tool if the request matches a defined capability.
+    *   Format function calls with EXACT required parameters (Dates: YYYY-MM-DD, Times: HH:MM).
+    *   For Notion functions (`createNotionNote`, `createNotionTable`, `addNotionTableRow`), you MUST determine the `parent_page_title` (for notes/tables) or `database_title` (for table rows). Ask the user if you're unsure where to put it.
+    *   For `createNotionTable`, the `properties_schema` parameter MUST be an object where keys are column names and values follow the Notion API structure (e.g., `{{"Status": {{"select": {{"options": [{{"name": "To Do"}}]}}}}, "Due Date": {{"date": {{}}}}}}`). Do NOT define the 'Title' column here.
+    *   For `addNotionTableRow`, ensure `entry_data` keys match the table's column names.
+    *   Only use the functions provided. Include user-friendly text alongside function calls.
 
-Instead of saying: 'I have scheduled your event titled 'Meeting with John' for 2023-04-15 at 14:00.'
-Say something like: 'Got it! I've added your meeting with John this Saturday at 2pm.'
+EXAMPLES:
+User: "Remind me to buy milk tomorrow at 8am"
+Model: "Sure! I'll remind you to buy milk tomorrow at 8 AM. 🥛"
+Function call: `setReminder`(...)
 
-Instead of saying: 'I have set a reminder for you to 'take medication' on 2023-04-14 at 09:00.'
-Say something like: 'I'll remind you to take your medication tomorrow morning at 9am.'
+User: "Schedule lunch with Sarah next Wed at 1pm at The Cafe"
+Model: "Got it! Lunch with Sarah scheduled for next Wednesday at 1 PM at The Cafe. 📅"
+Function call: `scheduleEvent`(...)
 
-Use conversational language and avoid technical terms. You can use emoji occasionally to appear more friendly.
-Keep your responses brief and to the point - usually 1-3 sentences is ideal.
+User: "Save this idea as a note in my 'Project X Ideas' page: AI feedback analysis."
+Model: "Okay, saving that idea to your 'Project X Ideas' page in Notion!"
+Function call: `createNotionNote`(...)
 
-Be helpful by suggesting related actions when appropriate, but avoid overwhelming the user with too many options.
+User: "Create a table on 'Finances' page to track expenses: Date, Item, Category (Select), Amount (Number)"
+Model: "Sure, creating Expenses table on 'Finances' page in Notion with columns: Date, Item, Category, Amount."
+Function call: `createNotionTable` (title="Expenses", parent_page_title="Finances", properties_schema={{"Date": {{"date": {{}}}}, "Item": {{"rich_text": {{}}}}, "Category": {{"select": {{"options": []}}}}, "Amount": {{"number": {{"format": "dollar"}}}}}}) # LLM provides schema
 
-IMPORTANT: 
- - ALWAYS use the function tools unless no function tools matches the query
- - Extract SPECIFIC details from the message
- - FORMAT function call with EXACT required parameters
- - Date format is YYYY-MM-DD
- - Time format is HH:MM
- - If the user does not specify a date, use todays date.
- - If the user does not specify a time, ask the user for the time.
- - If the user asks for reminders, use the getReminder function.
- - If the user asks to schedule an event, use the scheduleEvent function.
- - If the user asks to cancel an event, use the cancelEvent function.
- - If the user asks to set a reminder, use the setReminder function.
- - If the user asks to set a reoccuring reminder, use the setRecurringReminder function.
- - Only use the functions provided. Do not make up functions.
- - If function calls are identified, make sure to add accompanying text with the function.
-
- EXAMPLE:
- User: "Remind me to eat eggs tomorrow at 10 am"
- Model: "Sure! Will remind you to eat eggs tomorrow at 10 AM"
- Function call: Call setReminder function with:
- - message: "eat eggs"
- - time: "10:00"
- - date: "2025-03-28"
-
- EXAMPLE:
- User: "Remind me to check the mail in 5 minutes"
- Model: "Sure! Will remind you to check the mail in 5 minutes"
- REQUIRED ACTION: Call setReminder function with:
- - message: "Check mail"
- - time: "10:05"
- - date: "2025-03-28"
-
- EXAMPLE:
- User: "Schedule meeting with bob next week tuesday at 2pm"
- Model: "Got it! I've scheduled your meeting with Bob for next Tuesday at 2 PM."
- REQUIRED ACTION: Call scheduleEvent function with:
- - title: "meeting with bob"
- - date: "2025-04-01"
- - time: "14:00"
-
- EXAMPLE:
- User: "What events do I have upcoming?"
- Model: "You have a meeting with Bob on April 1st at 2 PM."
- REQUIRED ACTION: Call getUpcomingEvents function.
+User: "Add to 'Groceries' table: Item=Apples, Quantity=5"
+Model: "Okay, adding Apples (Quantity: 5) to your Groceries table in Notion."
+Function call: `addNotionTableRow` (database_title="Groceries", entry_data={{"Item": "Apples", "Quantity": "5"}})
 """
 
+
 class LLMProcessor:
+    # ... (keep __init__ method as before, ensuring TOOLS is checked) ...
     def __init__(self):
         # Configure the client
         dynamic_system_prompt = get_dynamic_system_prompt()
         config = types.GenerateContentConfig(tools=[TOOLS], temperature=LLM_TEMPERATURE, system_instruction=dynamic_system_prompt)
         self.client = genai.Client(api_key=GEMINI_API_KEY)
-        self.time_processor = TimeProcessor()
         
         # Store the model and config for creating chats in async methods
         self.model = LLM_MODEL
@@ -219,202 +242,149 @@ class LLMProcessor:
         
         # Create a semaphore to limit concurrent API calls if needed
         self.semaphore = asyncio.Semaphore(5)  # Adjust the value based on API rate limits
+    # ... (keep _convert_history method) ...
+    def _convert_history(self, history: List[Dict[str, str]]) -> List[types.Content]:
+        gemini_history = []
+        current_content = None
+        for entry in history:
+            role = entry.get("role")
+            content_text = entry.get("content", "")
 
+            if role == "user":
+                # If previous message was also user, append (shouldn't happen with good history management)
+                # Otherwise, start new user content
+                current_content = types.Content(parts=[types.Part(text=content_text)], role="user")
+                gemini_history.append(current_content)
+            elif role == "assistant":
+                # Start new model content
+                # TODO: Handle potential function calls stored in history correctly
+                current_content = types.Content(parts=[types.Part(text=content_text)], role="model")
+                gemini_history.append(current_content)
+            # Ignore other roles for now
+        return gemini_history
+
+
+    # ... (keep process_message, process_multimodal_message - ensure they use self.model.start_chat) ...
     async def process_message(self, user_message: str, conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Process a text message asynchronously"""
-        logger.info(f"Sending message to LLM: {user_message}")
-        
+        logger.info(f"Processing message for LLM: {user_message}")
         async with self.semaphore:
-            # Create a new chat session for each request to ensure thread safety
-            chat = self.client.chats.create(model=self.model, config=self.config)
-            
-            # Use asyncio.to_thread to run the blocking API call in a separate thread
-            response = await asyncio.to_thread(chat.send_message, user_message)
-            
-            logger.info(f"Got response from LLM: {response}")
-            
-            return await self._process_response(response)
+            try:
+                # Start chat session with history
+                chat = self.client.chats.create(model=self.model, config=self.config)
+                response = await asyncio.to_thread(chat.send_message, user_message)
 
-    async def process_multimodal_message(self, user_message: str, image_url: str, conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Process a multimodal message with text and image asynchronously"""
-        
-        # Create a new chat session for each request
-        chat = self.client.chats.create(model=self.model, config=self.config)
-        
-        # If this is the first message, send context about current date
-        if len(conversation_history) == 0:
-            await asyncio.to_thread(
-                chat.send_message, 
-                f"Please use the context - current date is {datetime.now().strftime('%Y-%m-%d')}"
-            )
-        
-        # Read the image file asynchronously
-        async with aiofiles.open(image_url, "rb") as image_file:
-            image_data = await image_file.read()
-        
-        # Create the parts for the message
-        image_part = types.Part(file_data=types.FileData(
-            mime_type="image/jpeg", 
-            data=image_data
-        ))
-        
-        parts = [
-            types.Part(text=user_message),
-            image_part
-        ]
-        
-        # Use asyncio.to_thread to run the blocking API call in a separate thread
+                logger.debug(f"Raw LLM response: {response}")
+                return self._process_response(response)
+            except Exception as e:
+                logger.error(f"Error during LLM communication: {e}", exc_info=True)
+                return {"response_text": "Sorry, I encountered an error trying to understand that.", "function_calls": []}
+
+    async def process_multimodal_message(self, user_message: str, image_path: str, conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:
+        logger.info(f"Processing multimodal message. Text: {user_message}, Image: {image_path}")
         async with self.semaphore:
-            response = await asyncio.to_thread(chat.send_message, parts)
-        
-        return await self._process_response(response)
+            try:
+                async with aiofiles.open(image_path, "rb") as image_file:
+                    image_data = await image_file.read()
+                mime_type = "image/jpeg" # Or determine dynamically
+                image_part = types.Part(inline_data=types.Blob(mime_type=mime_type, data=image_data))
+                parts = [types.Part(text=user_message), image_part]
 
-    async def process_function_result(self, function_calls: List[Dict[str, Any]], function_results: List[Dict[str, Any]], conversation_history: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Process function results asynchronously"""
-        
-        # Create a new chat session for each request
-        chat = self.client.chats.create(model=self.model, config=self.config)
-        
-        # Prepare the parts
-        parts = []
-        
-        # Add original function calls
-        for func_call in function_calls:
-            parts.append(
-                types.Part(
-                    function_call=types.FunctionCall(
-                        name=func_call["name"],
-                        args=func_call["args"]
+                chat = self.client.chats.create(model=self.model, config=self.config)
+                response = await asyncio.to_thread(chat.send_message, user_message)
+
+
+                logger.debug(f"Raw LLM multimodal response: {response}")
+                return self._process_response(response)
+            except FileNotFoundError:
+                 logger.error(f"Image file not found: {image_path}")
+                 return {"response_text": "Sorry, I couldn't find the image file.", "function_calls": []}
+            except Exception as e:
+                 logger.error(f"Error during LLM multimodal communication: {e}", exc_info=True)
+                 return {"response_text": "Sorry, I encountered an error processing the image.", "function_calls": []}
+
+    # ... (keep process_function_result - NOTE: Still needs robust chat state handling) ...
+    async def process_function_result(
+        self,
+        function_name: str,
+        function_response_data: Dict[str, Any],
+        # Option 1: Use Any (Safest if internal type changes)
+        chat_session: Optional[Any] = None
+        # Option 2: Remove type hint temporarily if preferred
+        # chat_session = None
+    ) -> Dict[str, Any]:
+        """Sends function execution result back to the LLM.
+           Ideally, pass the chat_session object obtained from model.start_chat().
+        """
+        logger.info(f"Sending function result for '{function_name}' back to LLM.")
+        if not chat_session:
+            logger.warning("No chat session provided to process_function_result. LLM context might be lost.")
+            # Fallback: Start a new chat (less ideal as context is lost)
+            # Note: This fallback might still lead to suboptimal conversations
+            # as the LLM won't remember the function *call* that led to this *response*.
+            chat_session = self.model.start_chat(history=[]) # Create a new session object
+
+        async with self.semaphore:
+            try:
+                function_response_part = types.Part(
+                    function_response=types.FunctionResponse(
+                        name=function_name,
+                        response=function_response_data # Must be serializable dict
                     )
                 )
-            )
-        
-        # Add function results
-        for result in function_results:
-            # Handle case where result might be a list or dictionary
-            if isinstance(result, list):
-                # If it's a list, convert the first item
-                result = result[0] if result else {}
-            
-            # Ensure result is a dictionary
-            if not isinstance(result, dict):
-                result = {}
-            
-            # Convert result to a standard dictionary that can be serialized
-            function_response = {
-                "status": result.get("status", "unknown"),
-                "message": result.get("message", ""),
-                "details": {k: v for k, v in result.items() if k not in ["status", "message"]}
-            }
-            
-            parts.append(types.Part(text=json.dumps(function_response)))
-        
-        # Send the contents to the LLM using asyncio.to_thread
-        logger.info("Sending function results back to LLM for processing")
-        
-        try:
-            async with self.semaphore:
-                response = await asyncio.to_thread(chat.send_message, parts)
-            return await self._process_response(response)
-        except Exception as e:
-            logger.error(f"Error sending function results to LLM: {e}")
-            return {
-                "response_text": "I encountered an issue processing your request.",
-                "function_calls": []
-            }
+                # Send the result using the provided (or newly created) chat session object
+                response = await chat_session.send_message_async(function_response_part)
 
-    async def _process_response(self, response) -> Dict[str, Any]:
-        """Process the response from the LLM asynchronously"""
-        
-        # This function doesn't do any I/O, so we can just make it async
-        # and use the same processing logic
-        result = {
-            "response_text": response.text if response.text else "",
-            "function_calls": []
+                logger.debug(f"Raw LLM response after function result: {response}")
+                return self._process_response(response) # Process the response
+            except Exception as e:
+                logger.error(f"Error sending function result to LLM: {e}", exc_info=True)
+                return {"response_text": "Sorry, I encountered an error processing the previous action's result.", "function_calls": []}
+
+    # ... (keep _process_response method - already corrected to be synchronous) ...
+    def _process_response(self, response: types.GenerateContentResponse) -> Dict[str, Any]:
+        response_text = ""
+        function_calls = []
+        try:
+            response_text = response.text # Use the convenient .text attribute
+            parts = response.candidates[0].content.parts
+
+            for part in parts if len(parts) > 0 else []:
+                if part.function_call:
+                    fc = part.function_call
+                    # Convert proto Map to dict
+                    args_dict = {k: v for k, v in fc.args.items()}
+                    function_calls.append({
+                        "name": fc.name,
+                        "args": args_dict
+                    })
+                    logger.info(f"LLM requested function call: {fc.name} with args: {args_dict}")
+        except (AttributeError, ValueError, TypeError) as e:
+            logger.error(f"Error parsing LLM response content: {e}", exc_info=True)
+            try:
+                response_text = response.text
+            except Exception:
+                 response_text = "Sorry, I had trouble processing the response."
+        if not response_text and function_calls:
+            response_text = f"Okay, planning to run: {function_calls[0]['name']}."
+
+        return {
+            "response_text": response_text,
+            "function_calls": function_calls
         }
 
-        try:
-            # Explicitly handle function calls
-            if hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'content') and candidate.content:
-                    content = candidate.content
-                    if hasattr(content, 'parts'):
-                        for part in content.parts:
-                            if hasattr(part, 'function_call') and part.function_call:
-                                function_call = part.function_call
-                                try:
-                                    result["response_text"] = f"{result.get('response_text', '')}\n\n{function_call.name}"
-                                    # Convert the dictionary to a JSON string
-                                    args_json = json.dumps(function_call.args) if function_call.args else "{}"
-                                    args = json.loads(args_json)
-                                    result["function_calls"].append({
-                                        "name": function_call.name,
-                                        "args": args #this would be a dictionary
-                                    })
-                                except (json.JSONDecodeError, TypeError) as e:
-                                    logger.error(f"Error parsing function call args: {e}")
-            return result
 
-        except Exception as e:
-            logger.error(f"Error processing response: {e}", exc_info=True)
-            return result
-    
+    # ... (keep parse_date_range if needed elsewhere, maybe move to utils) ...
     def parse_date_range(self, date_range: str) -> int:
-        """Convert a date range string to number of days."""
-        # This method doesn't contain I/O operations, so it can remain synchronous
-        if "today" in date_range.lower():
-            return 0
-        elif "tomorrow" in date_range.lower():
-            return 1
-        if "day" in date_range.lower():
-            # Extract number from strings like "next 7 days"
-            try:
-                return int(''.join(filter(str.isdigit, date_range)))
-            except:
-                return 7  # Default to a week
-        elif "week" in date_range.lower():
-            if "this" in date_range.lower():
-                return 7
-            else:
-                # For "next 2 weeks", etc.
-                try:
-                    num_weeks = int(''.join(filter(str.isdigit, date_range)))
-                    return num_weeks * 7
-                except:
-                    return 7
-        elif "month" in date_range.lower():
-            return 30
-        else:
-            return 7  # Default to a week
-
-    def parse_time_interval(self, interval: str) -> Tuple[int, str]:
-        """
-        Parse a time interval string like "every 2 hours" and return interval in minutes.
-        
-        Returns:
-            Tuple of (interval_minutes, frequency_type)
-        """
-        # This method doesn't contain I/O operations, so it can remain synchronous
-        interval = interval.lower()
-        if "minute" in interval:
-            try:
-                minutes = int(''.join(filter(str.isdigit, interval)))
-                return minutes, "custom"
-            except:
-                return 60, "custom"  # Default to 60 minutes
-        elif "hour" in interval:
-            try:
-                hours = int(''.join(filter(str.isdigit, interval)))
-                return hours * 60, "custom"
-            except:
-                return 60, "custom"  # Default to 1 hour
-        elif "day" in interval or "daily" in interval:
-            return 24 * 60, "daily"
-        elif "week" in interval or "weekly" in interval:
-            return 7 * 24 * 60, "weekly"
-        elif "month" in interval or "monthly" in interval:
-            return 30 * 24 * 60, "monthly"
-        else:
-            # Default to daily if we can't parse
-            return 24 * 60, "daily"
+        """Convert a date range string to number of days. (Simplified)"""
+        # ... (implementation as before) ...
+        date_range = date_range.lower() if date_range else "7 days" # Default
+        if "today" in date_range: return 0
+        if "tomorrow" in date_range: return 1
+        if "week" in date_range: return 7
+        if "month" in date_range: return 30
+        try:
+            match = re.search(r'(\d+)\s+day', date_range)
+            if match: return int(match.group(1))
+        except (ValueError, TypeError):
+            pass
+        return 7 # Default

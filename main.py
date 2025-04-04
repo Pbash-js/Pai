@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from starlette.middleware.sessions import SessionMiddleware
-
+import os
 from api.routes import router as api_router
 from database import init_db
 from config import HOST, PORT
@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan setup and teardown."""
     # Initialize database on startup
     logger.info("Initializing database...")
-    init_db()
+    await init_db()
     logger.info("Database initialized successfully.")
     
     yield
@@ -48,7 +48,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(SessionMiddleware, secret_key="your-secret-key") # Add middleware to the app
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
+if not SESSION_SECRET_KEY:
+    # Fallback for development ONLY - generate one for production!
+    print("WARNING: SESSION_SECRET_KEY not set, using insecure default. Generate a real key for production!")
+    SESSION_SECRET_KEY = "a_very_insecure_default_key_change_me"
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY) # Add middleware to the app
 
 # Include routers
 app.include_router(api_router, prefix="/api")
