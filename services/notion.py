@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from notion_client import AsyncClient, APIResponseError, APIErrorCode
 
 from database import crud # Import your crud functions
-
+from database.models import Reminder
 logger = logging.getLogger(__name__)
 
 # --- Helper Functions for Notion Blocks/Properties ---
@@ -76,6 +76,15 @@ class NotionService:
         logger.warning(f"No Notion access token found for user_id: {user_id}")
         return None
     
+    async def get_user_reminders_db_id(self,user_id: int) -> Optional[str]:
+        """Fetches the user's reminders database ID."""
+        user = await crud.get_user(self.db, user_id=user_id)
+        if user:
+            return user.notion_reminders_db_id
+        logger.warning(f"No user found with ID: {user_id}")
+
+
+        return None
 
     async def find_page_by_title(self, user_id: int, title: str, search_limit=10) -> Optional[str]:
         """Searches for a page by title within accessible pages."""
@@ -351,7 +360,7 @@ class NotionService:
 
     async def create_note_page(self, user_id: int, title: str, content: str, parent_page_id: Optional[str] = None) -> Dict[str, Any]:
         """Creates a simple note page in Notion."""
-        client = await self._get_client(user_id)
+        client = await self.get_client(user_id)
         if not client:
             return {"status": "error", "message": "Notion account not linked or token missing."}
 
@@ -400,9 +409,111 @@ class NotionService:
             logger.error(f"Unexpected error creating Notion note for user {user_id}: {e}", exc_info=True)
             return {"status": "error", "message": "An unexpected error occurred while creating the Notion note."}
 
+    async def create_event_page(self, user_id: int, title: str, content: str, parent_page_id: Optional[str] = None) -> Dict[str, Any]:
+        """Creates a simple note page in Notion."""
+        client = await self.get_client(user_id)
+        if not client:
+            return {"status": "error", "message": "Notion account not linked or token missing."}
+
+        # --- Determine Parent ---
+        # Strategy:
+        # 1. If parent_page_id provided, use it.
+        # 2. (Optional) Search for a default "Notes" page/database if no parent_id.
+        # 3. Fallback: Create in workspace root (might require specific permissions).
+        # For simplicity, let's require parent_page_id for now or implement search later.
+
+        if not parent_page_id:
+            # You could try searching for a default page/DB here
+            # default_notes_page_id = await self.find_page_by_title(user_id, "My Bot Notes")
+            # if default_notes_page_id:
+            #    parent_page_id = default_notes_page_id
+            # else:
+                 #return {"status": "error", "message": "Please specify where to save the note (e.g., 'save note to My Project page')."}
+            # Let's assume parent_page_id MUST be provided for now by the LLM or user context
+            return {"status": "error", "message": "No parent page specified for the note."}
+
+
+        try:
+            logger.info(f"Creating Notion note '{title}' for user {user_id} under parent {parent_page_id}")
+            page_data = {
+                "parent": {"page_id": parent_page_id},
+                "properties": {
+                    "title": title_prop(title)
+                    # Add other properties like 'Created Date' if desired
+                },
+                "children": [text_block(content)] # Add content as a paragraph block
+            }
+            response = await client.pages.create(**page_data)
+            page_url = response.get("url", "")
+            logger.info(f"Successfully created Notion note for user {user_id}. URL: {page_url}")
+            return {"status": "success", "message": f"Note '{title}' created in Notion.", "page_url": page_url}
+
+        except APIResponseError as e:
+            logger.error(f"Notion API error creating note for user {user_id}: {e}")
+            if e.code == APIErrorCode.ObjectNotFound:
+                 return {"status": "error", "message": f"Could not find the parent page/database ({parent_page_id}) in Notion. Does it exist?"}
+            elif e.code == APIErrorCode.Unauthorized:
+                 return {"status": "error", "message": "I don't have permission to create pages in that part of your Notion. Please check the integration permissions."}
+            else:
+                 return {"status": "error", "message": f"Notion API error: {e.code}"}
+        except Exception as e:
+            logger.error(f"Unexpected error creating Notion note for user {user_id}: {e}", exc_info=True)
+            return {"status": "error", "message": "An unexpected error occurred while creating the Notion note."}
+
+    async def create_reminder_page(self, user_id: int,reminder: Reminder, parent_page_id: Optional[str] = None) -> Dict[str, Any]:
+        """Creates a simple note page in Notion."""
+        logger.info(f"Reminder redceived - {reminder}")
+        client = await self.get_client(user_id)
+        if not client:
+            return {"status": "error", "message": "Notion account not linked or token missing."}
+
+        # --- Determine Parent ---
+        # Strategy:
+        # 1. If parent_page_id provided, use it.
+        # 2. (Optional) Search for a default "Notes" page/database if no parent_id.
+        # 3. Fallback: Create in workspace root (might require specific permissions).
+        # For simplicity, let's require parent_page_id for now or implement search later.
+
+        if not parent_page_id:
+            # You could try searching for a default page/DB here
+            # default_notes_page_id = await self.find_page_by_title(user_id, "My Bot Notes")
+            # if default_notes_page_id:
+            #    parent_page_id = default_notes_page_id
+            # else:
+                 #return {"status": "error", "message": "Please specify where to save the note (e.g., 'save note to My Project page')."}
+            # Let's assume parent_page_id MUST be provided for now by the LLM or user context
+            return {"status": "error", "message": "No parent page specified for the note."}
+
+
+        try:
+            logger.info(f"Creating Notion Reminder '{reminder.message}' for user {reminder.user_id} under parent {parent_page_id}")
+            page_data = {
+                "parent": {"database_id": parent_page_id},
+                "properties": {
+                    "title": title_prop(reminder.message)
+                    # Add other properties like 'Created Date' if desired
+                }
+            }
+            response = await client.pages.create(**page_data)
+            page_url = response.get("url", "")
+            logger.info(f"Successfully created Notion note for user {user_id}. URL: {page_url}")
+            return {"status": "success", "message": f"Note '{reminder.message}' created in Notion.", "page_url": page_url}
+
+        except APIResponseError as e:
+            logger.error(f"Notion API error creating note for user {user_id}: {e}")
+            if e.code == APIErrorCode.ObjectNotFound:
+                 return {"status": "error", "message": f"Could not find the parent page/database ({parent_page_id}) in Notion. Does it exist?"}
+            elif e.code == APIErrorCode.Unauthorized:
+                 return {"status": "error", "message": "I don't have permission to create pages in that part of your Notion. Please check the integration permissions."}
+            else:
+                 return {"status": "error", "message": f"Notion API error: {e.code}"}
+        except Exception as e:
+            logger.error(f"Unexpected error creating Notion note for user {user_id}: {e}", exc_info=True)
+            return {"status": "error", "message": "An unexpected error occurred while creating the Notion note."}
+
     async def create_tracking_database(self, user_id: int, title: str, properties_schema: Dict[str, Dict], parent_page_id: str) -> Dict[str, Any]:
         """Creates a new database (table) within a parent page in Notion."""
-        client = await self._get_client(user_id)
+        client = await self.get_client(user_id)
         if not client:
             return {"status": "error", "message": "Notion account not linked or token missing."}
 
@@ -440,7 +551,7 @@ class NotionService:
 
     async def add_entry_to_database(self, user_id: int, database_id: str, entry_data: Dict[str, Any]) -> Dict[str, Any]:
         """Adds a new page (row) to a specific Notion database."""
-        client = await self._get_client(user_id)
+        client = await self.get_client(user_id)
         if not client:
             return {"status": "error", "message": "Notion account not linked or token missing."}
 

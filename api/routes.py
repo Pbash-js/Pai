@@ -418,7 +418,7 @@ async def execute_function_call(db: AsyncSession, user_id: int, func_call: Dict[
         # --- Internal Bot Functions ---
         if function_name == "setReminder":
             # Assuming service method is now async
-            # result = await reminder_service.set_reminder(user_id, args)
+            result = await reminder_service.set_reminder(user_id, args)
              # Simulate success for now, replace with actual async call
             await asyncio.sleep(0.1) # Simulate async work
             result = {"status": "success", "message": f"Reminder '{args.get('message')}' set.", "details": args}

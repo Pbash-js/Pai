@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from database import crud
 from database.models import RepeatFrequency
 from llm.processor import LLMProcessor
-
+import uuid
 #changes
 import logging
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ class ReminderService:
         self.db = db
         self.llm_processor = LLMProcessor()
     
-    def set_reminder(self, user_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def set_reminder(self, user_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Set a new reminder for the user.
         
@@ -61,7 +61,7 @@ class ReminderService:
         
         # Create reminder
         logger.info("Setting reminder!!!")
-        reminder = crud.create_reminder(
+        reminder = await crud.create_reminder(
             db=self.db,
             user_id=user_id,
             message=message,
@@ -73,7 +73,6 @@ class ReminderService:
         
         return {
             "status": "success",
-            "reminder_id": reminder.id,
             "message": message,
             "scheduled_time": scheduled_time.isoformat(),
             "is_recurring": is_recurring,

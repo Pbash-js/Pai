@@ -13,6 +13,7 @@ from sqlalchemy.future import select
 # <<-- Adjust import path if necessary -->>
 from .models import User, Reminder, CalendarEvent, Session, RepeatFrequency,Note, MediaAttachment, NoteType
 import logging
+from services.notion import NotionService 
 # <<-- End import path adjustment -->>
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,11 @@ async def create_reminder(
     db.add(reminder)
     await db.commit()
     await db.refresh(reminder)
+
+    #Add to notion
+    notionservice = NotionService(db=db)
+    parent_page_id = await notionservice.get_user_reminders_db_id(user_id=user_id)
+    await notionservice.create_reminder_page(user_id=user_id,parent_page_id=parent_page_id, reminder=reminder)
     return reminder
 
 async def get_upcoming_reminders(db: AsyncSession, user_id: int, days: int = 7) -> List[Reminder]:

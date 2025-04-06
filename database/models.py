@@ -58,6 +58,7 @@ class User(Base):
     # Relationships
     reminders = relationship("Reminder", back_populates="user", cascade="all, delete-orphan")
     calendar_events = relationship("CalendarEvent", back_populates="user", cascade="all, delete-orphan")
+    notes = relationship("Note", back_populates="user", cascade="all, delete-orphan")
     # << -- Add relationship to Session if it wasn't linked before -->>
     session = relationship("Session", back_populates="user", uselist=False, cascade="all, delete-orphan")
     # << -- End Session relationship -- >>
@@ -71,7 +72,7 @@ class Reminder(Base):
     message = Column(String, nullable=False)
     scheduled_time = Column(DateTime, nullable=False)
     is_recurring = Column(Boolean, default=False)
-    repeat_frequency = Column(Enum(RepeatFrequency), default=RepeatFrequency.NONE)
+    repeat_frequency = Column(SQLEnum(RepeatFrequency), default=RepeatFrequency.NONE)
     repeat_interval = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
